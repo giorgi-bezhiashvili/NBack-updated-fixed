@@ -1,0 +1,144 @@
+### Variables
+@baseUrl = http://localhost:3000
+
+###
+### ===== QUIZ =====
+###
+
+### 1. Get All Quizzes
+GET {{baseUrl}}/api/quiz
+
+###
+### 2. Login (captures accessToken for the protected requests below)
+# @name quizRegister
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+  "userName": "giorgibezhiashvili",
+  "password": "madmosebxnnymvyklivag"
+}
+
+###
+### 2. Login (captures accessToken for the protected requests below)
+# @name quizLogin
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "userName": "testuser1",
+  "password": "password123"
+}
+
+###
+
+### 3. Create a Multiple-Choice Quiz (Success)
+POST {{baseUrl}}/api/quiz
+Content-Type: application/json
+Authorization: Bearer {{quizLogin.response.body.$.accessToken}}
+
+{
+  "grade": 9,
+  "topic": "დინამიკა",
+  "assignment": "სხეულზე მოქმედი ძალაა 20 N, მასა — 4 კგ. რისი ტოლია აჩქარება?",
+  "answers": ["2 მ/წმ²", "5 მ/წმ²", "80 მ/წმ²", "0.2 მ/წმ²"],
+  "realAnswer": "5 მ/წმ²",
+  "explanation": "ნიუტონის მეორე კანონით a = F/m = 20/4 = 5 მ/წმ².",
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  "urlName": "იხილეთ მეტი"
+}
+
+###
+
+### 4. Create a Free-Response Quiz (Success — no answers array)
+POST {{baseUrl}}/api/quiz
+Content-Type: application/json
+Authorization: Bearer {{quizLogin.response.body.$.accessToken}}
+
+{
+  "grade": 7,
+  "topic": "სიმკვრივე",
+  "assignment": "სხეულის მასაა 500 გ, მოცულობა — 250 სმ³. რისი ტოლია სიმკვრივე?",
+  "answers": [],
+  "realAnswer": "2 გ/სმ³",
+  "explanation": "სიმკვრივე ρ = m/V = 500/250 = 2 გ/სმ³.",
+  "url": "",
+  "urlName": ""
+}
+
+###
+
+### 5. Create Quiz (401 — Missing/Invalid Token)
+POST {{baseUrl}}/api/quiz
+Content-Type: application/json
+
+{
+  "grade": 9,
+  "topic": "ტესტი",
+  "assignment": "ტესტკითხვა",
+  "answers": [],
+  "realAnswer": "ტესტი",
+  "explanation": "ტესტი"
+}
+
+###
+
+### 6. Create Quiz (400 — Missing Required Fields)
+POST {{baseUrl}}/api/quiz
+Content-Type: application/json
+Authorization: Bearer {{quizLogin.response.body.$.accessToken}}
+
+{}
+
+###
+
+### 7. Update a Quiz (Success)
+# Replace REPLACE_WITH_REAL_ID with an _id from request 1's response
+PATCH {{baseUrl}}/api/quiz/REPLACE_WITH_REAL_ID
+Content-Type: application/json
+Authorization: Bearer {{quizLogin.response.body.$.accessToken}}
+
+{
+  "grade": 9,
+  "topic": "დინამიკა (განახლებული)",
+  "assignment": "სხეულზე მოქმედი ძალაა 30 N, მასა — 5 კგ. რისი ტოლია აჩქარება?",
+  "answers": ["6 მ/წმ²", "150 მ/წმ²", "35 მ/წმ²", "0.17 მ/წმ²"],
+  "realAnswer": "6 მ/წმ²",
+  "explanation": "a = F/m = 30/5 = 6 მ/წმ².",
+  "url": "",
+  "urlName": ""
+}
+
+###
+
+### 8. Update Quiz (404 — Not Found)
+PATCH {{baseUrl}}/api/quiz/000000000000000000000000
+Content-Type: application/json
+Authorization: Bearer {{quizLogin.response.body.$.accessToken}}
+
+{
+  "grade": 9,
+  "topic": "ტესტი",
+  "assignment": "ტესტკითხვა",
+  "answers": [],
+  "realAnswer": "ტესტი",
+  "explanation": "ტესტი"
+}
+
+###
+
+### 9. Delete a Quiz (Success)
+# Replace REPLACE_WITH_REAL_ID with an _id from request 1's response
+DELETE {{baseUrl}}/api/quiz/REPLACE_WITH_REAL_ID
+Authorization: Bearer {{quizLogin.response.body.$.accessToken}}
+
+###
+
+### 10. Delete Quiz (404 — Not Found)
+DELETE {{baseUrl}}/api/quiz/000000000000000000000000
+Authorization: Bearer {{quizLogin.response.body.$.accessToken}}
+
+###
+
+### 11. Delete Quiz (401 — Missing Token)
+DELETE {{baseUrl}}/api/quiz/000000000000000000000000
