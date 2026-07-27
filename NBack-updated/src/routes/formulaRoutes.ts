@@ -1,9 +1,10 @@
-import { Router, type Request, type Response } from "express";
+import { Router, type Request, type Response, type RequestHandler } from "express";
 import Formula from "../models/formulaSchema.js"; 
 import { authenticateToken } from "../middleware/authenticateToken.js";
 const router = Router();
 import { validate } from "../middleware/validate.js";
 import Joi from 'joi';
+import { requireRole } from "../middleware/authorize.js"; 
 
 // 1. Updated Interface (matching property names)
 interface FormulaPost {
@@ -31,7 +32,7 @@ router.get("/", async (req: Request, res: Response)=> {
     res.status(500).json({ error: "Internal server error" });
   }
 });
-router.post("/", authenticateToken,validate<FormulaPost>(formulaSchema), async (req: Request, res: Response): Promise<void> => {
+router.post("/", authenticateToken as RequestHandler, requireRole("teacher") as RequestHandler, validate<FormulaPost>(formulaSchema), async (req: Request, res: Response): Promise<void> => {
   try {
     const newFormula = new Formula(req.body);
     const savedFormula = await newFormula.save();
@@ -42,7 +43,7 @@ router.post("/", authenticateToken,validate<FormulaPost>(formulaSchema), async (
   }
 });
 
-router.patch("/:id", authenticateToken,validate<FormulaPost>(formulaSchema), async (req: Request, res: Response): Promise<void> => {
+router.patch("/:id", authenticateToken as RequestHandler, requireRole("teacher") as RequestHandler, validate<FormulaPost>(formulaSchema), async (req: Request, res: Response): Promise<void> => {
   try {
     const updatedFormula = await Formula.findByIdAndUpdate(
       req.params.id,
@@ -60,7 +61,7 @@ router.patch("/:id", authenticateToken,validate<FormulaPost>(formulaSchema), asy
   }
 });
 
-router.delete("/:id", authenticateToken, async (req: Request, res: Response): Promise<void> => {
+router.delete("/:id", authenticateToken as RequestHandler, requireRole("teacher") as RequestHandler, async (req: Request, res: Response): Promise<void> => {
   try {
     const deletedFormula = await Formula.findByIdAndDelete(req.params.id);
     if (!deletedFormula) {

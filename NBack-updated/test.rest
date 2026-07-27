@@ -15,8 +15,9 @@ POST {{baseUrl}}/api/auth/register
 Content-Type: application/json
 
 {
-  "userName": "giorgibezhiashvili",
-  "password": "madmosebxnnymvyklivag"
+  "userName": "giorgibezhiashvi3231li",
+  "password": "mfddsafdasdap",
+  "email": "giorgibezhiashvili@example.com"
 }
 
 ###

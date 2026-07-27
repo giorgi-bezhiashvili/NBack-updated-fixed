@@ -1,9 +1,10 @@
-import { Router, type Request, type Response } from "express";
+import { Router, type Request, type RequestHandler, type Response } from "express";
 import project from "../models/projectSchema.js"; 
 import { authenticateToken } from "../middleware/authenticateToken.js";
 const router = Router();
 import { validate } from "../middleware/validate.js";
 import Joi from 'joi';
+import { requireRole } from "../middleware/authorize.js"; // Import role middleware
 
 // 1. Correct TypeScript Interface syntax
 interface projectPost {
@@ -34,7 +35,7 @@ router.get("/", async (req: Request, res: Response)=> {
   }
 });
 
-router.post("/",authenticateToken,validate<projectPost>(projectSchema), async (req: Request, res: Response): Promise<void> => {
+router.post("/",authenticateToken, requireRole("teacher") as RequestHandler,validate<projectPost>(projectSchema), async (req: Request, res: Response): Promise<void> => {
   try {
     const newProject = new project(req.body);
     const savedProject = await newProject.save();
@@ -45,7 +46,7 @@ router.post("/",authenticateToken,validate<projectPost>(projectSchema), async (r
   }
 });
 
-router.patch("/:id", authenticateToken,validate<projectPost>(projectSchema), async (req: Request, res: Response): Promise<void> => {
+router.patch("/:id", authenticateToken, requireRole("teacher") as RequestHandler, validate<projectPost>(projectSchema), async (req: Request, res: Response): Promise<void> => {
   try {
     const updatedProject = await project.findByIdAndUpdate(
       req.params.id,
@@ -63,7 +64,7 @@ router.patch("/:id", authenticateToken,validate<projectPost>(projectSchema), asy
   }
 });
 
-router.delete("/:id", authenticateToken, async (req: Request, res: Response): Promise<void> => {
+router.delete("/:id", authenticateToken, requireRole("teacher") as RequestHandler, async (req: Request, res: Response): Promise<void> => {
   try {
     const deletedProject = await project.findByIdAndDelete(req.params.id);
     if (!deletedProject) {

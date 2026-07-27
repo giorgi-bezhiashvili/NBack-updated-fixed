@@ -1,15 +1,24 @@
 import express, { type Request, type Response } from "express";
 import mongoose from "mongoose";
 import cors from "cors";
+import passport from "passport";
 import formulaRoutes from "../src/routes/formulaRoutes.js";
 import projectRoutes from "../src/routes/projectRoutes.js";
 import authRoutes from "../src/routes/authRoutes.js";
+import streakRoutes from "../src/routes/streakRoutes.js";
+import quizRoutes from "../src/routes/quizRoutes.js";
 import dotenv from "dotenv";
 import helmet from "helmet";
 import sanitize from "mongo-sanitize";
 import rateLimit from "express-rate-limit";
 import { xss } from "express-xss-sanitizer";
-import quizRoutes from "../src/routes/quizRoutes.js";
+import savedRoutes from "../src/routes/savedRoutes.js";
+
+// Registers the "google" strategy with passport as a side effect of being
+// imported — this is what was missing. Must run before any request hits
+// passport.authenticate("google", ...) in authRoutes.
+import "../src/config/googleStrategy.js";
+
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
@@ -60,9 +69,7 @@ app.use(
   }),
 );
 
-// HTTP Parameter Pollution guard (Express-5-safe replacement for `hpp`,
-// which reassigns req.query and throws under Express 5's read-only getter).
-// Mutating keys in place instead of reassigning the object avoids the issue.
+
 app.use((req, _res, next) => {
   for (const key of Object.keys(req.query)) {
     const value = (req.query as Record<string, unknown>)[key];
@@ -75,12 +82,13 @@ app.use((req, _res, next) => {
 
 app.use((req, _res, next) => {
   if (req.body) req.body = sanitize(req.body); // body is safely reassignable
-  if (req.params) sanitize(req.params); // mutates in place, no reassignment
-  if (req.query) sanitize(req.query); // mutates in place, no reassignment
+  if (req.params) sanitize(req.params); 
+  if (req.query) sanitize(req.query);
   next();
 });
 app.use(limiter);
 app.use(xss());
+app.use(passport.initialize());
 // Database connection helper for serverless environment
 const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/myapp";
 
@@ -105,8 +113,9 @@ app.use(async (req, res, next) => {
 // Routes
 app.use("/api/formulas", formulaRoutes);
 app.use("/api/projects", projectRoutes);
-app.use("/api/quiz", quizRoutes); // was: app.use("/api/assignments", AssignmentRoutes);
+app.use("/api/quiz", quizRoutes);
+app.use("/api/streak", streakRoutes);
 app.use("/api/auth", authRoutes);
-app.listen(3000)
+app.use("/api/saved", savedRoutes);
 // Export for Vercel (Do not block inside an async startServer function)
 export default app;
