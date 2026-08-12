@@ -10,13 +10,12 @@ function requireEnv(name: string): string {
 }
 
 export function authenticateToken(req: Request, res: Response, next: NextFunction): void {
-  const authHeader = req.headers["authorization"];
-  const token = authHeader?.split(" ")[1];
+  const token = req.cookies?.accessToken as string | undefined;
   if (!token) {
     res.sendStatus(401);
     return;
   }
-  jwt.verify(token, requireEnv("ACCESS_TOKEN_SECRET"), (err, decoded) => {
+  jwt.verify(token, requireEnv("ACCESS_TOKEN_SECRET"), { algorithms: ["HS256"] }, (err, decoded) => {
     if (err || !decoded || typeof decoded === "string") {
       res.sendStatus(403);
       return;

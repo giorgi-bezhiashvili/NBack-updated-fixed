@@ -1,11 +1,25 @@
 import { Router, type Request, type RequestHandler, type Response } from "express";
 import { authenticateToken } from "../middleware/authenticateToken.js";
+import { optionalAuth } from "../middleware/optionalAuth.js";
 import { validate } from "../middleware/validate.js";
 import Joi from "joi";
+import rateLimit from "express-rate-limit";
 import Quiz from "../models/quizSchema.js";
 import { requireRole } from "../middleware/authorize.js"; // Import role middleware
 import User from "../models/userSchema.js";
 const router = Router();
+
+// Anonymous visitors can take quizzes, so this can't require login — but it's
+// also the only place that reveals realAnswer, so it gets its own limiter
+// separate from the account-level authLimiter in authRoutes.ts, to blunt
+// answer-guessing bots hitting a single quiz repeatedly.
+const checkAnswerLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 20,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  ipv6Subnet: 56,
+});
 
 interface QuizPost {
   topic: string;
@@ -18,6 +32,14 @@ interface QuizPost {
   explanation: string;
 }
 
+interface CheckAnswerBody {
+  answer: string;
+}
+
+const checkAnswerSchema = Joi.object<CheckAnswerBody>({
+  answer: Joi.string().allow("").required(),
+});
+
 const quizSchema = Joi.object<QuizPost>({
   topic: Joi.string().required(),
   assignment: Joi.string().required(),
@@ -29,9 +51,12 @@ const quizSchema = Joi.object<QuizPost>({
   explanation: Joi.string().required(),
 });
 
-router.get("/", async (req: Request, res: Response) => {
+router.get("/", optionalAuth, async (req: Request, res: Response) => {
   try {
-    const quizzes = await Quiz.find({});
+    const isTeacher = req.user?.role === "teacher";
+    const quizzes = isTeacher
+      ? await Quiz.find({})
+      : await Quiz.find({}).select("-realAnswer -explanation");
     res.status(200).json(quizzes);
   } catch (err) {
     console.error(err);
@@ -63,6 +88,55 @@ router.get("/done", authenticateToken as RequestHandler, async (req: Request, re
   }
 });
 
+// PUT /api/quiz/:id/check
+// The only endpoint that ever compares against or reveals realAnswer.
+// GET / and GET /done never send it — the frontend must call this after
+// the student submits an answer, instead of comparing client-side against
+// data it already fetched.
+router.put(
+  "/:id/check",
+  checkAnswerLimiter,
+  validate<CheckAnswerBody>(checkAnswerSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const quiz = await Quiz.findById(req.params.id);
+      if (!quiz) {
+        res.status(404).json({ error: "Quiz not found" });
+        return;
+      }
+      const submitted = String(req.body.answer ?? "").trim().toLowerCase();
+      const correct = quiz.realAnswer.trim().toLowerCase() === submitted;
+      res.status(200).json({
+        correct,
+        realAnswer: quiz.realAnswer,
+        explanation: quiz.explanation,
+      });
+
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+router.put("/:id/addToDone", authenticateToken, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const quizId = req.params.id;
+    const userName = req.user?.userName;
+    if (!userName) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const updatedUser = await User.findOneAndUpdate(
+      { userName },
+      { $addToSet: { doneQuizes: quizId } },
+      { new: true }
+    ).select("doneQuizes");
+    res.status(200).json({ message: "Quiz marked as done", doneQuizes: updatedUser?.doneQuizes });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 router.post(
   "/",
   authenticateToken,

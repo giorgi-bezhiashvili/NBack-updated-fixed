@@ -14,9 +14,9 @@ export interface IUser extends Document {
   googleId?: string;
   role: string;
   saved: ISavedItem[];
-  doneQuizes: Types.ObjectId[];
-  streak:number;
-  lastLogin: Date;
+  doneQuizes: Types.ObjectId[]; 
+  streak: number;                
+  lastLogin: Date | null;        
 }
 
 const savedItemSchema = new Schema<ISavedItem>(
@@ -37,7 +37,7 @@ const userSchema = new Schema<IUser>({
     },
   },
   googleId: { type: String, unique: true, sparse: true },
-  role: { type: String, required: true , default: "user"},
+  role: { type: String, required: true, default: "user" },
   streak: { type: Number, default: 0 },
   lastLogin: { type: Date, default: null },
   saved: { type: [savedItemSchema], default: [] },

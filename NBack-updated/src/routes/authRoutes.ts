@@ -10,6 +10,9 @@ import RefreshToken from "../models/refreshTokenSchema.js";
 import { validate } from "../middleware/validate.js";
 import PasswordResetToken from "../models/passwordResetTokenSchema.js";
 import { sendPasswordResetEmail } from "../utils/mailer.js";
+import { setAuthCookies, clearAuthCookies } from "../utils/cookie.js";
+import { authenticateToken } from "../middleware/authenticateToken.js";
+import refreshTokenSchema from "../models/refreshTokenSchema.js";
 const router = Router();
 
 function requireEnv(name: string): string {
@@ -19,8 +22,6 @@ function requireEnv(name: string): string {
   }
   return value;
 }
-
-// --- TYPES & SCHEMAS ---
 
 interface RegisterBody {
   userName: string;
@@ -65,8 +66,18 @@ const resetPasswordSchema = Joi.object<ResetPasswordBody>({
 });
 
 const forgotPasswordLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
+  windowMs: 60 * 60 * 1000,
   limit: 3,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  ipv6Subnet: 56,
+});
+const tokenLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 10,
+  skipFailedRequests: false,
+  skipSuccessfulRequests: false,
+  skip: (req, res) => res.statusCode === 429,
   standardHeaders: "draft-8",
   legacyHeaders: false,
   ipv6Subnet: 56,
@@ -83,18 +94,15 @@ const loginSchema = Joi.object<LoginBody>({
 });
 
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   limit: 4,
   standardHeaders: "draft-8",
   legacyHeaders: false,
   ipv6Subnet: 56,
 });
 
-// Valid 10-round bcrypt hash for dummy comparisons
 const DUMMY_HASH =
   "$2b$12$1HNN1qFZHzeHdX50CzmWoudVmfLCNZwdeluSjuYKQiDwr4f8v1h22";
-
-// --- HELPERS ---
 
 function generateAccessToken(
   user: Pick<IUserLike, "userName" | "role">,
@@ -120,9 +128,6 @@ function generateRefreshToken(
   });
 }
 
-// Issues a token pair + refresh-token-family record, used by both
-// /login and /google/callback so every auth path gets the same
-// rotation/replay protection.
 async function issueTokenPair(user: IUserLike): Promise<{
   accessToken: string;
   refreshToken: string;
@@ -130,18 +135,12 @@ async function issueTokenPair(user: IUserLike): Promise<{
   const accessToken = generateAccessToken(user);
   const refreshToken = generateRefreshToken(user);
   const familyId = crypto.randomUUID();
+  const tokenHash = crypto.createHash("sha256").update(refreshToken).digest("hex");
 
-  await RefreshToken.create({
-    token: refreshToken,
-    userName: user.userName,
-    familyId,
-    used: false,
-  });
+  await RefreshToken.create({ tokenHash, userName: user.userName, familyId, used: false });
 
   return { accessToken, refreshToken };
 }
-
-// --- ROUTES ---
 
 router.post(
   "/register",
@@ -198,13 +197,13 @@ router.post(
       }
 
       const { accessToken, refreshToken } = await issueTokenPair(existingUser);
+      setAuthCookies(res, accessToken, refreshToken);
 
       res
         .status(200)
         .json({
           message: "Login successfully",
-          accessToken,
-          refreshToken,
+          userName: existingUser.userName,
           role: existingUser.role,
         });
     } catch (err) {
@@ -214,9 +213,9 @@ router.post(
   },
 );
 
-router.post("/token", async (req: Request<unknown, unknown, RefreshBody>, res: Response) => {
+router.post("/token", tokenLimiter, async (req: Request<unknown, unknown, RefreshBody>, res: Response) => {
   try {
-    const refreshToken = req.body.token;
+    const refreshToken = req.cookies?.refreshToken as string | undefined;
     if (!refreshToken) {
       res.sendStatus(401);
       return;
@@ -224,48 +223,69 @@ router.post("/token", async (req: Request<unknown, unknown, RefreshBody>, res: R
 
     let decoded: AccessTokenPayload;
     try {
-      decoded = jwt.verify(refreshToken, requireEnv("REFRESH_TOKEN_SECRET")) as AccessTokenPayload;
+      decoded = jwt.verify(refreshToken, requireEnv("REFRESH_TOKEN_SECRET"), {
+        algorithms: ["HS256"],
+      }) as AccessTokenPayload;
     } catch {
       res.sendStatus(403);
       return;
     }
 
-    const storedToken = await RefreshToken.findOne({ token: refreshToken });
-    if (!storedToken) {
-      res.sendStatus(401);
-      return;
-    }
+    const incomingHash = crypto.createHash("sha256").update(refreshToken).digest("hex");
 
-    if (storedToken.used) {
-      // Replay attack detected: revoke entire family
-      await RefreshToken.deleteMany({ familyId: storedToken.familyId });
+    const storedToken = await RefreshToken.findOneAndUpdate(
+      { tokenHash: incomingHash, used: false },
+      { $set: { used: true } },
+      { returnDocument: "after" }
+    );
+
+    if (!storedToken) {
+      const usedToken = await RefreshToken.findOne({ tokenHash: incomingHash });
+
+      if (!usedToken) {
+        res.sendStatus(401);
+        return;
+      }
+
+      const gracePeriodMs = 10 * 1000;
+      const timeSinceUsed = Date.now() - new Date(usedToken.updatedAt).getTime();
+
+      if (timeSinceUsed <= gracePeriodMs) {
+        
+        res.status(429).json({ message: "Token refresh in progress. Please wait." });
+        return;
+      }
+
+      await RefreshToken.deleteMany({ familyId: usedToken.familyId });
+      clearAuthCookies(res);
       res.sendStatus(403);
       return;
     }
 
-    // Fresh lookup — role may have changed since this token was issued
+    // 4. Verify User
     const currentUser = await User.findOne({ userName: decoded.userName });
     if (!currentUser) {
       res.sendStatus(401);
       return;
     }
 
+    // 5. Generate New Tokens
     const accessToken = generateAccessToken({ userName: currentUser.userName, role: currentUser.role });
     const newRefreshToken = generateRefreshToken({ userName: currentUser.userName, role: currentUser.role });
+    const newTokenHash = crypto.createHash("sha256").update(newRefreshToken).digest("hex");
 
+    // 6. Save new token in the same family
     await RefreshToken.create({
-      token: newRefreshToken,
+      tokenHash: newTokenHash,
       userName: currentUser.userName,
       familyId: storedToken.familyId,
       used: false,
     });
 
-    storedToken.used = true;
-    await storedToken.save();
-
-    res.json({ accessToken, refreshToken: newRefreshToken, role: currentUser.role });
+    setAuthCookies(res, accessToken, newRefreshToken);
+    res.json({ userName: currentUser.userName, role: currentUser.role });
   } catch (err) {
-    console.error(err);
+    console.error("Refresh token error:", err);
     res.status(500).send("Server error");
   }
 });
@@ -274,20 +294,19 @@ router.delete(
   "/logout",
   async (req: Request<unknown, unknown, RefreshBody>, res: Response) => {
     try {
-      const { token } = req.body;
+      const token = req.cookies?.refreshToken as string | undefined;
 
-      if (!token) {
-        res.sendStatus(400);
-        return;
+      if (token) {
+        const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+        const storedToken = await RefreshToken.findOne({ tokenHash });
+        if (storedToken) {
+          await RefreshToken.deleteMany({ familyId: storedToken.familyId });
+        } else {
+          await RefreshToken.deleteOne({ tokenHash });
+        }
       }
 
-      const storedToken = await RefreshToken.findOne({ token });
-      if (storedToken) {
-        await RefreshToken.deleteMany({ familyId: storedToken.familyId });
-      } else {
-        await RefreshToken.deleteOne({ token });
-      }
-
+      clearAuthCookies(res);
       res.sendStatus(204);
     } catch (err) {
       console.error(err);
@@ -295,6 +314,7 @@ router.delete(
     }
   },
 );
+
 router.post(
   "/forgot-password",
   forgotPasswordLimiter,
@@ -303,8 +323,6 @@ router.post(
     try {
       const { email } = req.body;
 
-      // Always return the same message so attackers can't use this endpoint
-      // to figure out which emails are registered.
       const genericResponse = {
         message:
           "If an account with that email exists, a password reset link has been sent.",
@@ -313,7 +331,6 @@ router.post(
       const existingUser = await User.findOne({ email: email.toLowerCase() });
 
       if (existingUser) {
-        // Invalidate any previously issued reset links for this user
         await PasswordResetToken.deleteMany({
           userName: existingUser.userName,
         });
@@ -335,7 +352,6 @@ router.post(
           await sendPasswordResetEmail(existingUser.email, resetLink);
         } catch (mailErr) {
           console.error("Failed to send password reset email:", mailErr);
-          // Don't leak the failure to the client — still respond generically
         }
       }
 
@@ -381,7 +397,6 @@ router.post(
       storedToken.used = true;
       await storedToken.save();
 
-      // Password changed — log the user out everywhere for safety
       await RefreshToken.deleteMany({ userName: user.userName });
 
       res
@@ -393,12 +408,6 @@ router.post(
     }
   },
 );
-
-// --- GOOGLE OAUTH ---
-// Requires passport.initialize() to be mounted once in your app entrypoint,
-// and the GoogleStrategy registered (see googleStrategy.ts). Mounting this
-// router at "/auth" gives you /auth/google and /auth/google/callback,
-// matching the paths the old app used.
 
 router.get(
   "/google",
@@ -419,15 +428,14 @@ router.get("/google/callback", (req: Request, res: Response, next) => {
  
       try {
         const { accessToken, refreshToken } = await issueTokenPair(user);
- 
+        setAuthCookies(res, accessToken, refreshToken);
+
         const params = new URLSearchParams({
-          accessToken,
-          refreshToken,
           role: user.role,
           userName: user.userName,
         });
  
-        res.redirect(`${frontendUrl}/auth/callback#${params.toString()}`);
+        res.redirect(`${frontendUrl}/auth/callback?${params.toString()}`);
       } catch (e) {
         console.error(e);
         res.redirect(`${frontendUrl}/login?error=google_auth_failed`);
@@ -435,5 +443,24 @@ router.get("/google/callback", (req: Request, res: Response, next) => {
     },
   )(req, res, next);
 });
- 
-export default router;
+router.delete("/user/delete", authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const userName = req.user?.userName;
+    if (!userName) {
+      res.status(401).json({ message: "Unauthorized: Missing user information" });
+      return;
+    }
+    const result = await User.deleteOne({ userName });
+    if (result.deletedCount === 0) {
+      res.status(404).json({ message: "User not found" });
+      return;
+    }
+    await RefreshToken.deleteMany({ userName });
+    clearAuthCookies(res);
+    res.status(200).json({ message: "User deleted successfully" });
+  } catch (error) {
+    console.error("Delete user error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+export default router
