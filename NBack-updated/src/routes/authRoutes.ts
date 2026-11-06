@@ -125,6 +125,7 @@ function generateRefreshToken(
   };
   return jwt.sign(payload, requireEnv("REFRESH_TOKEN_SECRET"), {
     expiresIn: "7d",
+    jwtid: crypto.randomUUID(),
   });
 }
 
@@ -226,10 +227,11 @@ router.post("/token", tokenLimiter, async (req: Request<unknown, unknown, Refres
       decoded = jwt.verify(refreshToken, requireEnv("REFRESH_TOKEN_SECRET"), {
         algorithms: ["HS256"],
       }) as AccessTokenPayload;
-    } catch {
+    }catch {
+      clearAuthCookies(res);
       res.sendStatus(403);
       return;
-    }
+}
 
     const incomingHash = crypto.createHash("sha256").update(refreshToken).digest("hex");
 
@@ -244,6 +246,7 @@ router.post("/token", tokenLimiter, async (req: Request<unknown, unknown, Refres
 
       if (!usedToken) {
         res.sendStatus(401);
+        console.log("Refresh token not found or already used:", decoded.userName);
         return;
       }
 
@@ -251,7 +254,7 @@ router.post("/token", tokenLimiter, async (req: Request<unknown, unknown, Refres
       const timeSinceUsed = Date.now() - new Date(usedToken.updatedAt).getTime();
 
       if (timeSinceUsed <= gracePeriodMs) {
-        
+        console.log("Token refresh in progress:", decoded.userName);
         res.status(429).json({ message: "Token refresh in progress. Please wait." });
         return;
       }
@@ -266,6 +269,7 @@ router.post("/token", tokenLimiter, async (req: Request<unknown, unknown, Refres
     const currentUser = await User.findOne({ userName: decoded.userName });
     if (!currentUser) {
       res.sendStatus(401);
+      console.log("User not found during token refresh:", decoded.userName);
       return;
     }
 

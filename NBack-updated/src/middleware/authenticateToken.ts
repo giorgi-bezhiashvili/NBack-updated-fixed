@@ -16,11 +16,11 @@ export function authenticateToken(req: Request, res: Response, next: NextFunctio
     return;
   }
   jwt.verify(token, requireEnv("ACCESS_TOKEN_SECRET"), { algorithms: ["HS256"] }, (err, decoded) => {
-    if (err || !decoded || typeof decoded === "string") {
-      res.sendStatus(403);
-      return;
-    }
-    req.user = decoded as unknown as Express.User;
-    next();
-  });
+  if (err || !decoded || typeof decoded === "string") {
+    res.sendStatus(401);
+    return;
+  }
+  req.user = decoded as unknown as Express.User;
+  next();
+});
 }
