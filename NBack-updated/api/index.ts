@@ -14,7 +14,7 @@ import sanitize from "mongo-sanitize";
 import rateLimit from "express-rate-limit";
 import { xss } from "express-xss-sanitizer";
 import savedRoutes from "../src/routes/savedRoutes.js";
-
+import lessonRoutes from "../src/routes/lessonRoutes.js"
 import "../src/config/googleStrategy.js";
 
 const limiter = rateLimit({
@@ -133,5 +133,5 @@ app.use("/api/quiz", quizRoutes);
 app.use("/api/streak", streakRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/saved", savedRoutes);
-
+app.use("/api/lesson")
 export default app;
